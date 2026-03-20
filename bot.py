@@ -22,7 +22,7 @@ import threading
 
 # ================= CONFIG FROM ENV =================
 # Get from environment variables (set these in Render)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8511686163:AAGloAfL9DKx5U-XMUtTKud0SG9ur33yQO0")  # Fallback for local
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA")  # Fallback for local
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8210445482"))  # Convert to int
 PORT = int(os.environ.get("PORT", 8080))
 
