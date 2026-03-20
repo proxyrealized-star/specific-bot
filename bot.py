@@ -23,7 +23,7 @@ import threading
 # ================= CONFIG FROM ENV =================
 # Get from environment variables (set these in Render)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA")  # Fallback for local
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "8210445482"))  # Convert to int
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8554863978"))  # Convert to int
 PORT = int(os.environ.get("PORT", 8080))
 
 API_URL = "https://tg-user-id-to-number-4erk.onrender.com/api/insta={}?api_key=PAID_INSTA_SELL187"
