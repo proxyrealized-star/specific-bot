@@ -4,17 +4,13 @@ import hashlib
 import sqlite3
 import requests
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import threading
 import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler,
-    CallbackQueryHandler, MessageHandler,
-    ContextTypes, filters
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # Flask imports
 from flask import Flask, request, render_template_string, redirect, url_for, session
@@ -22,9 +18,12 @@ import threading
 
 # ================= CONFIG FROM ENV =================
 # Get from environment variables (set these in Render)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA")  # Fallback for local
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "8554863978"))  # Convert to int
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8554863978"))
 PORT = int(os.environ.get("PORT", 8080))
+
+# ⚠️ IMPORTANT: Apna actual bot username yahan daalo (without @)
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "@specificxx_bot")  # Change this!
 
 API_URL = "https://tg-user-id-to-number-4erk.onrender.com/api/insta={}?api_key=PAID_INSTA_SELL187"
 
@@ -52,8 +51,8 @@ app.secret_key = SECRET_KEY
 db = sqlite3.connect("users.db", check_same_thread=False)
 cur = db.cursor()
 
-# Create tables with referral and premium system
-cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, joined_date TEXT, credits INTEGER DEFAULT 0, total_referrals INTEGER DEFAULT 0, is_premium INTEGER DEFAULT 0, premium_until TEXT)")
+# Create tables with credit system (no premium)
+cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, joined_date TEXT, credits INTEGER DEFAULT 0, total_referrals INTEGER DEFAULT 0)")
 cur.execute("CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, referred_username TEXT, joined_date TEXT, credits_given INTEGER DEFAULT 0)")
 cur.execute("CREATE TABLE IF NOT EXISTS bot_stats (id INTEGER PRIMARY KEY, total_searches INTEGER, total_reports INTEGER)")
 cur.execute("CREATE TABLE IF NOT EXISTS used_referrals (user_id INTEGER PRIMARY KEY, has_used INTEGER DEFAULT 0)")
@@ -70,15 +69,16 @@ def save_user(uid, username=None, referrer_id=None):
     cur.execute("SELECT id FROM users WHERE id = ?", (uid,))
     if not cur.fetchone():
         # New user - insert
-        cur.execute("INSERT INTO users (id, username, joined_date, credits, total_referrals, is_premium) VALUES (?, ?, ?, ?, ?, ?)", 
-                    (uid, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 0, 0, 0))
+        cur.execute("INSERT INTO users (id, username, joined_date, credits, total_referrals) VALUES (?, ?, ?, ?, ?)", 
+                    (uid, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 0, 0))
         db.commit()
         
         # Handle referral if provided
         if referrer_id and referrer_id != uid:
-            # Check if referrer exists and referred user hasn't used referral before
+            # Check if referrer exists
             cur.execute("SELECT id FROM users WHERE id = ?", (referrer_id,))
             if cur.fetchone():
+                # Check if referred user hasn't used referral before
                 cur.execute("SELECT has_used FROM used_referrals WHERE user_id = ?", (uid,))
                 if not cur.fetchone():
                     # Give credits to referrer
@@ -90,6 +90,13 @@ def save_user(uid, username=None, referrer_id=None):
                     # Mark as used
                     cur.execute("INSERT INTO used_referrals (user_id, has_used) VALUES (?, 1)", (uid,))
                     db.commit()
+                    
+                    # Notify referrer
+                    try:
+                        # This will be sent later via bot
+                        pass
+                    except:
+                        pass
     else:
         # User exists - just update username if needed
         if username:
@@ -98,18 +105,15 @@ def save_user(uid, username=None, referrer_id=None):
 
 def get_user_credits(uid):
     """Get user credits"""
-    cur.execute("SELECT credits, is_premium FROM users WHERE id = ?", (uid,))
+    cur.execute("SELECT credits FROM users WHERE id = ?", (uid,))
     result = cur.fetchone()
     if result:
-        return result[0], result[1]  # credits, is_premium
-    return 0, 0
+        return result[0]
+    return 0
 
 def deduct_credit(uid):
-    """Deduct one credit from user (if not premium)"""
-    credits, is_premium = get_user_credits(uid)
-    
-    if is_premium == 1:
-        return True  # Premium users don't need credits
+    """Deduct one credit from user"""
+    credits = get_user_credits(uid)
     
     if credits > 0:
         cur.execute("UPDATE users SET credits = credits - 1 WHERE id = ?", (uid,))
@@ -121,31 +125,6 @@ def add_credits(uid, amount):
     """Add credits to user"""
     cur.execute("UPDATE users SET credits = credits + ? WHERE id = ?", (amount, uid))
     db.commit()
-
-def make_premium(uid, days=30):
-    """Make user premium"""
-    premium_until = (datetime.now().replace(hour=23, minute=59, second=59) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?", (premium_until, uid))
-    db.commit()
-
-def remove_premium(uid):
-    """Remove premium status"""
-    cur.execute("UPDATE users SET is_premium = 0, premium_until = NULL WHERE id = ?", (uid,))
-    db.commit()
-
-def check_premium(uid):
-    """Check if user is premium and if premium expired"""
-    cur.execute("SELECT is_premium, premium_until FROM users WHERE id = ?", (uid,))
-    result = cur.fetchone()
-    if result and result[0] == 1:
-        if result[1]:
-            premium_until = datetime.strptime(result[1], "%Y-%m-%d %H:%M:%S")
-            if datetime.now() > premium_until:
-                # Premium expired
-                remove_premium(uid)
-                return False
-        return True
-    return False
 
 def total_users():
     cur.execute("SELECT COUNT(*) FROM users")
@@ -170,17 +149,22 @@ def log_usage(user_id, action):
     db.commit()
 
 def get_referral_link(user_id):
-    """Generate referral link"""
-    return f"https://t.me/{(BOT_TOKEN.split(':')[0])}?start=ref_{user_id}"
+    """Generate referral link - FIXED VERSION"""
+    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
 
 def get_user_details(uid):
     """Get complete user details"""
-    cur.execute("SELECT id, username, joined_date, credits, total_referrals, is_premium, premium_until FROM users WHERE id = ?", (uid,))
+    cur.execute("SELECT id, username, joined_date, credits, total_referrals FROM users WHERE id = ?", (uid,))
     return cur.fetchone()
 
 def get_top_referrers(limit=10):
     """Get top referrers"""
     cur.execute("SELECT id, username, total_referrals, credits FROM users WHERE total_referrals > 0 ORDER BY total_referrals DESC LIMIT ?", (limit,))
+    return cur.fetchall()
+
+def get_all_users():
+    """Get all users for admin"""
+    cur.execute("SELECT id, username, joined_date, credits, total_referrals FROM users ORDER BY joined_date DESC")
     return cur.fetchall()
 
 # ================= FORCE JOIN =================
@@ -413,6 +397,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].startswith("ref_"):
         try:
             referrer_id = int(context.args[0].split("_")[1])
+            print(f"Referral detected: {referrer_id} -> {uid}")  # Debug log
         except:
             pass
     
@@ -426,13 +411,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    credits, is_premium = get_user_credits(uid)
-    premium_status = "✅ PREMIUM" if is_premium == 1 else "❌ FREE"
+    credits = get_user_credits(uid)
     
     await update.message.reply_text(
-        f"✨ Welcome to Insta Analyzer Pro ✨\n\n"
-        f"📊 Your Status: {premium_status}\n"
-        f"💰 Credits: {credits}\n\n"
+        f"👏 Welcome to Insta Analyzer Pro 👏\n\n"
+        f"📈 Your Status: {'✅ PREMIUM' if credits > 100 else '❌ FREE'}\n"
+        f"💵 Credits: {credits}\n\n"
         f"Send any Instagram username to analyze!",
         reply_markup=menu_kb()
     )
@@ -444,51 +428,50 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "check":
         if await is_joined(context.bot, uid):
-            credits, is_premium = get_user_credits(uid)
-            premium_status = "✅ PREMIUM" if is_premium == 1 else "❌ FREE"
+            credits = get_user_credits(uid)
             await q.message.edit_text(
-                f"✅ Access granted!\n\n📊 Status: {premium_status}\n💰 Credits: {credits}",
+                f"✅ Access granted!\n\n💵 Credits: {credits}",
                 reply_markup=menu_kb()
             )
         else:
             await q.message.reply_text("❌ Please join all channels first", reply_markup=join_kb())
 
     elif q.data == "menu":
-        credits, is_premium = get_user_credits(uid)
-        premium_status = "✅ PREMIUM" if is_premium == 1 else "❌ FREE"
+        credits = get_user_credits(uid)
         await q.message.edit_text(
-            f"🏠 Main Menu\n\n📊 Status: {premium_status}\n💰 Credits: {credits}",
+            f"🏠 Main Menu\n\n💵 Credits: {credits}",
             reply_markup=menu_kb()
         )
 
     elif q.data == "credits":
-        credits, is_premium = get_user_credits(uid)
-        referrals = get_user_details(uid)[4] if get_user_details(uid) else 0
+        credits = get_user_credits(uid)
+        details = get_user_details(uid)
+        referrals = details[4] if details else 0
         
         text = f"💰 YOUR CREDITS: {credits}\n"
-        text += f"👥 TOTAL REFERRALS: {referrals}\n"
-        text += f"🎖️ PREMIUM: {'YES' if is_premium == 1 else 'NO'}\n\n"
+        text += f"👥 TOTAL REFERRALS: {referrals}\n\n"
         text += f"🔰 Get more credits:\n"
         text += f"• Refer friends: +{REFERRAL_CREDITS} credits each\n"
-        text += f"• Contact admin for premium"
+        text += f"• Contact admin to buy credits"
         
         await q.message.edit_text(text, reply_markup=menu_kb())
 
     elif q.data == "referral":
         link = get_referral_link(uid)
-        text = f"🔗 YOUR REFERRAL LINK:\n\n{link}\n\n"
-        text += f"💰 You get {REFERRAL_CREDITS} credits for each friend who joins!"
-        await q.message.edit_text(text, reply_markup=menu_kb())
+        text = f"🔗 YOUR REFERRAL LINK:\n\n`{link}`\n\n"
+        text += f"💰 You get {REFERRAL_CREDITS} credits for each friend who joins!\n\n"
+        text += f"📌 Share this link with your friends!"
+        await q.message.edit_text(text, reply_markup=menu_kb(), parse_mode='Markdown')
 
     elif q.data == "deep":
-        # Check credits/premium before proceeding
-        credits, is_premium = get_user_credits(uid)
-        if credits <= 0 and is_premium == 0:
+        # Check credits before proceeding
+        credits = get_user_credits(uid)
+        if credits <= 0:
             await q.message.reply_text(
                 "❌ You have 0 credits!\n\n"
                 "Get more credits by:\n"
                 "• Referring friends (+3 credits each)\n"
-                "• Contact admin for premium",
+                "• Contact admin to buy credits",
                 reply_markup=menu_kb()
             )
             return
@@ -499,12 +482,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif q.data.startswith("report|"):
         username = q.data.split("|")[1]
         
-        # Deduct credit (premium users don't get deducted)
-        credits, is_premium = get_user_credits(uid)
-        if is_premium == 0:
-            if not deduct_credit(uid):
-                await q.message.reply_text("❌ Insufficient credits!", reply_markup=menu_kb())
-                return
+        # Deduct credit
+        if not deduct_credit(uid):
+            await q.message.reply_text("❌ Insufficient credits!", reply_markup=menu_kb())
+            return
         
         await q.message.reply_text("🔄 Fetching full report...")
         increment_reports()
@@ -512,11 +493,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = fetch_profile(username)
         if not data:
+            # Refund credit if API fails
+            add_credits(uid, 1)
             await q.message.reply_text("❌ Profile not found or API error")
             return
         
         risk, issues = calc_risk(data)
         report = format_report(data, risk, issues)
+        
+        credits_left = get_user_credits(uid)
+        report += f"\n💰 Credits left: {credits_left}"
         
         await q.message.reply_text(report, reply_markup=after_kb(username))
 
@@ -529,7 +515,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💰 *Credit System:*\n"
             "• Each analysis costs 1 credit\n"
             "• Get 3 credits per referral\n"
-            "• Premium users get unlimited\n\n"
+            "• Buy credits from admin\n\n"
             "📊 *Commands:*\n"
             "• /start - Main menu\n"
             "• /credits - Check credits\n"
@@ -537,7 +523,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👑 *Admin only:*\n"
             "• /users - Total users\n"
             "• /stats - Bot stats\n"
-            "• /premium @user - Make premium\n"
+            "• /addcredits [user_id] [amount] - Add credits\n"
             "• /broadcast - Send message",
             parse_mode='Markdown'
         )
@@ -554,14 +540,14 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid username")
         return
     
-    # Check credits/premium
-    credits, is_premium = get_user_credits(uid)
-    if credits <= 0 and is_premium == 0:
+    # Check credits
+    credits = get_user_credits(uid)
+    if credits <= 0:
         await update.message.reply_text(
             "❌ You have 0 credits!\n\n"
             "Get more credits by:\n"
             "• Referring friends (+3 credits each)\n"
-            "• Contact admin for premium",
+            "• Contact admin to buy credits",
             reply_markup=menu_kb()
         )
         return
@@ -570,14 +556,15 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     increment_searches()
     log_usage(uid, f"search_{username_input}")
     
-    # Deduct credit (premium users don't get deducted)
-    if is_premium == 0:
-        deduct_credit(uid)
+    # Deduct credit
+    deduct_credit(uid)
     
     # Fetch profile data
     data = fetch_profile(username_input)
     
     if not data:
+        # Refund credit if API fails
+        add_credits(uid, 1)
         await status_msg.edit_text("❌ Profile not found or API error")
         return
     
@@ -589,8 +576,8 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pic_url = profile.get("profile_pic_url_hd")
     
     # Get updated credits
-    credits, is_premium = get_user_credits(uid)
-    caption = f"🎯 ANALYSIS COMPLETE\n@{username_input}\nRisk: {risk}%\n💰 Credits left: {credits if is_premium==0 else '∞'}"
+    credits_left = get_user_credits(uid)
+    caption = f"🎯 ANALYSIS COMPLETE\n@{username_input}\nRisk: {risk}%\n💰 Credits left: {credits_left}"
     
     # Try to send with profile pic
     if pic_url:
@@ -617,8 +604,7 @@ async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     total = total_users()
-    premium = cur.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
-    await update.message.reply_text(f"📊 STATISTICS:\n\n👥 Total users: {total}\n⭐ Premium users: {premium}")
+    await update.message.reply_text(f"👥 Total users: {total}")
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -627,117 +613,50 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     searches, reports = get_stats()
     total = total_users()
-    premium = cur.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
     referrals = cur.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
     
     await update.message.reply_text(
         f"📊 BOT STATISTICS:\n\n"
         f"👥 Total Users: {total}\n"
-        f"⭐ Premium Users: {premium}\n"
         f"🔍 Total Searches: {searches}\n"
         f"📄 Total Reports: {reports}\n"
         f"🔗 Total Referrals: {referrals}"
     )
 
-async def premium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /premium @username [days]")
-        return
-    
-    username = context.args[0].replace("@", "")
-    days = 30  # default
-    if len(context.args) > 1:
-        try:
-            days = int(context.args[1])
-        except:
-            pass
-    
-    # Find user by username
-    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-    result = cur.fetchone()
-    
-    if result:
-        make_premium(result[0], days)
-        await update.message.reply_text(f"✅ Made @{username} premium for {days} days!")
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                result[0],
-                f"🎉 Congratulations! You are now a PREMIUM user for {days} days!\n"
-                f"✨ You now have unlimited access to all features!"
-            )
-        except:
-            pass
-    else:
-        await update.message.reply_text("❌ User not found")
-
-async def remove_premium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /removepremium @username")
-        return
-    
-    username = context.args[0].replace("@", "")
-    
-    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-    result = cur.fetchone()
-    
-    if result:
-        remove_premium(result[0])
-        await update.message.reply_text(f"✅ Removed premium from @{username}")
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                result[0],
-                "Your premium subscription has expired. Use /start to check your current status."
-            )
-        except:
-            pass
-    else:
-        await update.message.reply_text("❌ User not found")
-
-async def add_credits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def addcredits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add credits to user - /addcredits user_id amount"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Unauthorized")
         return
     
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /addcredits @username amount")
+        await update.message.reply_text("Usage: /addcredits [user_id] [amount]")
         return
     
-    username = context.args[0].replace("@", "")
     try:
+        user_id = int(context.args[0])
         amount = int(context.args[1])
     except:
-        await update.message.reply_text("❌ Invalid amount")
+        await update.message.reply_text("❌ Invalid user_id or amount")
         return
     
-    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-    result = cur.fetchone()
+    # Check if user exists
+    cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    if not cur.fetchone():
+        await update.message.reply_text("❌ User not found in database")
+        return
     
-    if result:
-        add_credits(result[0], amount)
-        await update.message.reply_text(f"✅ Added {amount} credits to @{username}")
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                result[0],
-                f"💰 You received {amount} credits!"
-            )
-        except:
-            pass
-    else:
-        await update.message.reply_text("❌ User not found")
+    add_credits(user_id, amount)
+    await update.message.reply_text(f"✅ Added {amount} credits to user {user_id}")
+    
+    # Notify user
+    try:
+        await context.bot.send_message(
+            user_id,
+            f"💰 You received {amount} credits from admin!"
+        )
+    except:
+        pass
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -773,6 +692,27 @@ async def top_referrers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, (uid, username, referrals, credits) in enumerate(top, 1):
         text += f"{i}. @{username or uid}\n   👥 {referrals} referrals | 💰 {credits} credits\n"
     
+    await update.message.reply_text(text)
+
+async def listusers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all users with their credits - /listusers"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Unauthorized")
+        return
+    
+    users = get_all_users()
+    text = "📋 ALL USERS:\n\n"
+    
+    for user in users[:20]:  # Limit to 20 users to avoid message too long
+        uid, username, joined, credits, referrals = user
+        text += f"ID: {uid}\n"
+        text += f"User: @{username or 'N/A'}\n"
+        text += f"Credits: {credits}\n"
+        text += f"Referrals: {referrals}\n"
+        text += f"Joined: {joined[:10]}\n"
+        text += "───────────\n"
+    
+    text += f"\nTotal: {len(users)} users"
     await update.message.reply_text(text)
 
 # ================= FLASK ROUTES =================
@@ -822,11 +762,10 @@ def admin_dashboard():
     
     searches, reports = get_stats()
     total = total_users()
-    premium = cur.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
     referrals = cur.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
     
     # Get recent users
-    recent = cur.execute("SELECT id, username, joined_date, credits, is_premium FROM users ORDER BY joined_date DESC LIMIT 10").fetchall()
+    recent = cur.execute("SELECT id, username, joined_date, credits, total_referrals FROM users ORDER BY joined_date DESC LIMIT 10").fetchall()
     
     return render_template_string('''
         <!DOCTYPE html>
@@ -845,8 +784,9 @@ def admin_dashboard():
                 table { width: 100%; background: #2d2d2d; border-radius: 10px; overflow: hidden; }
                 th, td { padding: 12px; text-align: left; border-bottom: 1px solid #3d3d3d; }
                 th { background: #00a86b; }
-                .premium { color: gold; }
                 .logout { background: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+                .cmd-box { background: #2d2d2d; padding: 15px; border-radius: 10px; margin: 20px 0; }
+                .cmd { background: #3d3d3d; padding: 5px 10px; border-radius: 5px; font-family: monospace; }
             </style>
         </head>
         <body>
@@ -862,10 +802,6 @@ def admin_dashboard():
                         <p>{{ total }}</p>
                     </div>
                     <div class="stat-card">
-                        <h3>Premium Users</h3>
-                        <p>{{ premium }}</p>
-                    </div>
-                    <div class="stat-card">
                         <h3>Searches</h3>
                         <p>{{ searches }}</p>
                     </div>
@@ -879,6 +815,15 @@ def admin_dashboard():
                     </div>
                 </div>
                 
+                <div class="cmd-box">
+                    <h3>Admin Commands</h3>
+                    <p><span class="cmd">/addcredits [user_id] [amount]</span> - Add credits to user</p>
+                    <p><span class="cmd">/listusers</span> - List all users</p>
+                    <p><span class="cmd">/stats</span> - Bot statistics</p>
+                    <p><span class="cmd">/topreferrers</span> - Top 10 referrers</p>
+                    <p><span class="cmd">/broadcast [message]</span> - Send message to all</p>
+                </div>
+                
                 <h2>Recent Users</h2>
                 <table>
                     <tr>
@@ -886,7 +831,7 @@ def admin_dashboard():
                         <th>Username</th>
                         <th>Joined</th>
                         <th>Credits</th>
-                        <th>Status</th>
+                        <th>Referrals</th>
                     </tr>
                     {% for user in recent %}
                     <tr>
@@ -894,16 +839,14 @@ def admin_dashboard():
                         <td>@{{ user[1] or 'N/A' }}</td>
                         <td>{{ user[2] }}</td>
                         <td>{{ user[3] }}</td>
-                        <td class="{% if user[4] == 1 %}premium{% endif %}">
-                            {% if user[4] == 1 %}PREMIUM{% else %}FREE{% endif %}
-                        </td>
+                        <td>{{ user[4] }}</td>
                     </tr>
                     {% endfor %}
                 </table>
             </div>
         </body>
         </html>
-    ''', total=total, premium=premium, searches=searches, reports=reports, referrals=referrals, recent=recent)
+    ''', total=total, searches=searches, reports=reports, referrals=referrals, recent=recent)
 
 @app.route('/admin/logout')
 def admin_logout():
@@ -921,16 +864,16 @@ def run_bot():
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("users", users_cmd))
     app_bot.add_handler(CommandHandler("stats", stats_cmd))
-    app_bot.add_handler(CommandHandler("premium", premium_cmd))
-    app_bot.add_handler(CommandHandler("removepremium", remove_premium_cmd))
-    app_bot.add_handler(CommandHandler("addcredits", add_credits_cmd))
+    app_bot.add_handler(CommandHandler("addcredits", addcredits_cmd))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(CommandHandler("topreferrers", top_referrers_cmd))
+    app_bot.add_handler(CommandHandler("listusers", listusers_cmd))
     app_bot.add_handler(CallbackQueryHandler(callbacks))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
 
     print("✅ Bot started! Press Ctrl+C to stop")
     print(f"👑 Admin ID: {ADMIN_ID}")
+    print(f"🤖 Bot Username: @{BOT_USERNAME}")
     print(f"📊 Force channels: {FORCE_CHANNELS}")
     print(f"💰 Referral credits: {REFERRAL_CREDITS}")
     print(f"🌐 Admin panel: http://localhost:{PORT}/admin")
