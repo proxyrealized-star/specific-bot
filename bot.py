@@ -23,7 +23,7 @@ BOT_TOKEN = "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA"
 ADMIN_ID = 8554863978
 BOT_USERNAME = "specificxx_bot"  # ⚠️ Apna bot username yahan daalo
 
-API_URL = "https://tg-username-to-num.onrender.com/api/insta={}?api_key=PAID_INSTA_SELL187"
+API_URL = "https://paid-sell.vercel.app/api/proxy?type=insta&value=username_here"
 
 # ================= 4 FORCE CHANNELS =================
 FORCE_CHANNELS = [
