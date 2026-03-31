@@ -13,7 +13,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # --- CONFIGURATION ---
 TOKEN = "7888111866:AAHUBF0GQU8ya9uySEYu35HPJ_GFsnv1aa0"
-SERVER_URL = "https://your-app.onrender.com"  # CHANGE THIS TO YOUR RENDER URL
+SERVER_URL = "https://specific-bot.onrender.com"  # CHANGE THIS TO YOUR RENDER URL
 
 # FORCE JOIN CHANNELS (ONLY THESE 3)
 CHANNELS = [
